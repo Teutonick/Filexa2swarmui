@@ -1,0 +1,50 @@
+.filexa-connector-panel {
+  max-width: 720px;
+  padding: 18px;
+}
+
+.filexa-connector-panel h2 {
+  margin-bottom: 8px;
+}
+
+.filexa-description {
+  margin-bottom: 18px;
+  opacity: 0.88;
+  line-height: 1.45;
+}
+
+.filexa-connector-panel label {
+  display: block;
+  margin-top: 12px;
+  font-weight: 600;
+}
+
+.filexa-connector-panel input:not([type="checkbox"]) {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 8px 10px;
+}
+
+.filexa-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filexa-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+#filexa_status {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  line-height: 1.45;
+  min-height: 120px;
+}

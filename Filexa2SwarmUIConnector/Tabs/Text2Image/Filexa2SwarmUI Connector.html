@@ -25,8 +25,14 @@
     Debug logging
   </label>
 
+  <label class="filexa-row">
+    <input id="filexa_compress_images_before_upload" type="checkbox" checked />
+    Convert images to JPEG 80% before upload
+  </label>
+
   <div class="filexa-actions">
     <button onclick="filexa2SwarmUIConnectorSave()">Save</button>
+    <button onclick="filexa2SwarmUIConnectorCancelTask()">Cancel active task</button>
     <button onclick="filexa2SwarmUIConnectorDisconnect()">Disconnect</button>
     <button onclick="filexa2SwarmUIConnectorRefreshStatus()">Refresh status</button>
   </div>

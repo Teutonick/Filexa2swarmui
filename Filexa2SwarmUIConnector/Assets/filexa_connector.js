@@ -33,6 +33,7 @@
       `Last event: ${data.last_event || "-"}`,
       `Token saved: ${data.has_token ? "yes" : "no"}`,
       `Debug logging: ${data.debug_logging ? "on" : "off"}`,
+      `JPEG 80% conversion before upload: ${data.compress_images_before_upload ? "on" : "off"}`,
       `Polls: ${data.poll_count || 0}`,
     ];
     if (data.active_job_id) {
@@ -64,6 +65,7 @@
         document.getElementById("filexa_swarm_url").value = data.swarm_url || "http://127.0.0.1:7801";
         document.getElementById("filexa_enabled").checked = !!data.enabled;
         document.getElementById("filexa_debug_logging").checked = !!data.debug_logging;
+        document.getElementById("filexa_compress_images_before_upload").checked = data.compress_images_before_upload !== false;
       }
       status.textContent = renderStatus(data);
     } catch (error) {
@@ -88,6 +90,7 @@
         swarm_url: document.getElementById("filexa_swarm_url").value,
         enabled: document.getElementById("filexa_enabled").checked,
         debug_logging: document.getElementById("filexa_debug_logging").checked,
+        compress_images_before_upload: document.getElementById("filexa_compress_images_before_upload").checked,
       });
       document.getElementById("filexa_token").value = "";
       status.textContent = renderStatus(data);
@@ -104,6 +107,16 @@
       window.filexa2SwarmUIConnectorLoad();
     } catch (error) {
       status.textContent = `Disconnect failed: ${error.message}`;
+    }
+  };
+
+  window.filexa2SwarmUIConnectorCancelTask = async function () {
+    const status = document.getElementById("filexa_status");
+    try {
+      const data = await callFilexaApi("CancelFilexa2SwarmUIConnectorTask", {});
+      status.textContent = renderStatus(data);
+    } catch (error) {
+      status.textContent = `Cancel failed: ${error.message}`;
     }
   };
 

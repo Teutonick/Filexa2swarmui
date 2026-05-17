@@ -58,7 +58,7 @@
       return;
     }
     try {
-      const data = await callFilexaApi("GetFilexaConnectorConfig", {});
+      const data = await callFilexaApi("GetFilexa2SwarmUIConnectorConfig", {});
       if (updateFields) {
         document.getElementById("filexa_api_url").value = data.api_url || "";
         document.getElementById("filexa_swarm_url").value = data.swarm_url || "http://127.0.0.1:7801";
@@ -71,18 +71,18 @@
     }
   }
 
-  window.filexaConnectorLoad = async function () {
+  window.filexa2SwarmUIConnectorLoad = async function () {
     await refreshStatus({ updateFields: true });
   };
 
-  window.filexaConnectorRefreshStatus = async function () {
+  window.filexa2SwarmUIConnectorRefreshStatus = async function () {
     await refreshStatus({ updateFields: false });
   };
 
-  window.filexaConnectorSave = async function () {
+  window.filexa2SwarmUIConnectorSave = async function () {
     const status = document.getElementById("filexa_status");
     try {
-      const data = await callFilexaApi("SaveFilexaConnectorConfig", {
+      const data = await callFilexaApi("SaveFilexa2SwarmUIConnectorConfig", {
         api_url: document.getElementById("filexa_api_url").value,
         token: document.getElementById("filexa_token").value,
         swarm_url: document.getElementById("filexa_swarm_url").value,
@@ -96,12 +96,12 @@
     }
   };
 
-  window.filexaConnectorDisconnect = async function () {
+  window.filexa2SwarmUIConnectorDisconnect = async function () {
     const status = document.getElementById("filexa_status");
     try {
-      await callFilexaApi("DisconnectFilexaConnector", {});
+      await callFilexaApi("DisconnectFilexa2SwarmUIConnector", {});
       status.textContent = "Disconnected.";
-      window.filexaConnectorLoad();
+      window.filexa2SwarmUIConnectorLoad();
     } catch (error) {
       status.textContent = `Disconnect failed: ${error.message}`;
     }
@@ -109,9 +109,9 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     if (document.getElementById("filexa_status")) {
-      window.filexaConnectorLoad();
-      window.clearInterval(window.filexaConnectorStatusTimer);
-      window.filexaConnectorStatusTimer = window.setInterval(window.filexaConnectorRefreshStatus, 2000);
+      window.filexa2SwarmUIConnectorLoad();
+      window.clearInterval(window.filexa2SwarmUIConnectorStatusTimer);
+      window.filexa2SwarmUIConnectorStatusTimer = window.setInterval(window.filexa2SwarmUIConnectorRefreshStatus, 2000);
     }
   });
 })();

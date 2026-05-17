@@ -1,11 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
-    <AssemblyName>FilexaConnector</AssemblyName>
+    <AssemblyName>Filexa2SwarmUIConnector</AssemblyName>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <Import Project="../../SwarmUI.extension.props" Condition="Exists('../../SwarmUI.extension.props')" />
   <Target Name="RequireSwarmUIExtensionProps" BeforeTargets="ResolveReferences" Condition="!Exists('../../SwarmUI.extension.props')">
-    <Error Text="Build FilexaConnector from inside SwarmUI/src/Extensions/FilexaConnector so ../../SwarmUI.extension.props and SwarmUI.dll are available." />
+    <Error Text="Build Filexa2SwarmUIConnector from inside SwarmUI/src/Extensions/Filexa2SwarmUIConnector so ../../SwarmUI.extension.props and SwarmUI.dll are available." />
   </Target>
 </Project>

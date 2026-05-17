@@ -1,0 +1,34 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_tmp*/
+pytest-cache-files-*/
+*.egg-info/
+.venv/
+diagnostics/*
+
+TICKETS_TODO.md
+
+.env
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/backups/
+data/logs/
+data/tests/
+
+
+# .NET build artifacts
+bin/
+obj/
+
+# Build outputs
+dist/
+*.dll
+*.pdb
+*.zip
+
+# IDE/user files
+.vs/
+*.user
+*.suo

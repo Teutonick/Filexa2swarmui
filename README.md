@@ -1,4 +1,4 @@
-# Filexa Connector
+# Filexa2SwarmUI Connector
 
 Connects SwarmUI to Filexa local generation so Telegram users can run T2I and I2I jobs on this PC.
 The connector tab shows live polling, active job, elapsed time, latest upload status, and optional debug logging.
@@ -9,7 +9,7 @@ Not affiliated with, endorsed by, or sponsored by SwarmUI.
 
 ## Layout
 
-- `FilexaConnector/` - SwarmUI extension source.
+- `Filexa2SwarmUIConnector/` - SwarmUI extension source.
 - `README.md` - installation and usage guide.
 - `LICENSE` - source code license.
 - `NOTICE.md` - legal notices and disclaimers.
@@ -18,6 +18,7 @@ Not affiliated with, endorsed by, or sponsored by SwarmUI.
 Prebuilt binaries are not distributed in this repository.
 
 ## Install For A SwarmUI User
+The extension is designed to work with https://t.me/WorkOnBigFilesBot only.
 
 1. Install SwarmUI from the official project:
    https://github.com/mcmonkeyprojects/SwarmUI
@@ -33,10 +34,10 @@ Prebuilt binaries are not distributed in this repository.
    encoder/VAE dependencies when needed.
 6. Restart SwarmUI, open the Generate tab, select Flux.2 Klein, and verify one local text-to-image
    generation before connecting the bot.
-7. Copy `FilexaConnector` into your SwarmUI folder:
-   `SwarmUI/src/Extensions/FilexaConnector`.
+7. Copy `Filexa2SwarmUIConnector` into your SwarmUI folder:
+   `SwarmUI/src/Extensions/Filexa2SwarmUIConnector`.
 8. Restart SwarmUI or run the SwarmUI update/build script so the extension compiles.
-9. Open the new `Filexa Connector` tab.
+9. Open the new `Filexa2SwarmUI Connector` tab.
 10. Paste the Filexa API URL and token shown by the Telegram bot. Save the token if you might
     reuse it; the tab hides it after saving.
 11. In the bot settings, set the SwarmUI model code, steps, and cfg if the defaults do not match.
@@ -54,7 +55,8 @@ Prebuilt binaries are not distributed in this repository.
 - The connector only makes outgoing HTTPS/HTTP requests to Filexa.
 - It never requires exposing the user's SwarmUI port to the internet.
 - It does not delete local SwarmUI outputs.
-- It polls lazily every 20 seconds and only runs generation when Filexa returns a task.
+- It polls lazily every 10 seconds, sends heartbeat/status updates while enabled, and only runs
+  generation when Filexa returns a task.
 
 **Important: the developer and the bot do not have access to the user's computer. All operations
 with third-party software, downloaded models, and local configuration are performed by the user at
@@ -64,7 +66,7 @@ damage, data loss, or any other loss caused by these actions.**
 
 ## Legal Notice
 
-This repository contains only the Filexa SwarmUI Connector source code.
+This repository contains only the Filexa2SwarmUI Connector source code.
 
 The connector is licensed under the MIT License. The Filexa bot/API service is
 provided under separate Filexa Terms of Use and Privacy Policy:

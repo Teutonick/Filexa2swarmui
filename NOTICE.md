@@ -1,6 +1,6 @@
 # Notices and Disclaimers
 
-This repository contains the Filexa SwarmUI Connector, an open-source connector
+This repository contains the Filexa2SwarmUI Connector, an open-source connector
 that allows a user's local SwarmUI installation to receive generation tasks from
 Filexa and return generation results to Filexa.
 

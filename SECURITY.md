@@ -2,7 +2,7 @@
 
 ## Scope
 
-This security policy applies only to the Filexa SwarmUI Connector code published in this repository.
+This security policy applies only to the Filexa2SwarmUI Connector code published in this repository.
 
 It does not apply to:
 

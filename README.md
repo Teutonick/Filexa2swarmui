@@ -49,14 +49,50 @@ all traffic outbound from the user's PC to Filexa. No public SwarmUI port is req
 SwarmUI compiles extensions inside its own source tree. This repository provides the connector source code only. SwarmUI compiles the
 extension inside the user's local SwarmUI installation during restart/update.
 Prebuilt binaries are not distributed in this repository.
+The extension uses `SixLabors.ImageSharp` for optional JPEG conversion and relies on the ImageSharp
+version already restored by SwarmUI's extension props. Do not add a second ImageSharp package
+reference inside this extension; duplicate references can make SwarmUI restore fail.
 
 ## Behavior
 
 - The connector only makes outgoing HTTPS/HTTP requests to Filexa.
 - It never requires exposing the user's SwarmUI port to the internet.
 - It does not delete local SwarmUI outputs.
-- It polls lazily every 10 seconds, sends heartbeat/status updates while enabled, and only runs
+- It polls lazily every 10 seconds, sends task status updates while enabled, and only runs
   generation when Filexa returns a task.
+- It can convert generated images to JPEG at 80% quality before sending them back to Filexa. If a normal direct
+  result upload stalls, it automatically falls back to 50 KB binary chunks, then to 8 KB paced
+  JSON/base64 chunks, and finally to a safe 4 KB JSON/base64 mode without long per-mode retry loops,
+  so unstable networks, MTU issues, or bad routes are less likely to strand the connector on one job.
+  JSON/base64 upload uses `Connection: close` and pauses between chunks. When a JSON/base64 mode
+  succeeds, the connector caches that local upload mode for several hours and tries the normal direct
+  path again after the cache expires.
+- The `Cancel active task` button asks Filexa to cancel the current task and returns the connector
+  to polling for new tasks.
+
+## Troubleshooting FAQ
+
+### I want to update or reset the extension, but old data is still shown.
+
+If SwarmUI still shows old extension data after an update, delete
+`SwarmUI\src\bin\extensions\SwarmExtensionFilexa2SwarmUIConnector` and restart SwarmUI.
+
+### Where do I change model code, steps, and cfg?
+
+Open Filexa and go to Local generation -> SwarmUI settings.
+
+### The result from my PC does not upload back to Filexa.
+
+If the process hangs after the file is ready, you may see a line like this in the SwarmUI
+terminal: `[Info] [Filexa2SwarmUI Connector] Upload attempt 1/1: bytes=1772384, mime=image/png`.
+The likely cause is network configuration: network, MTU, or route. Try a virtual private network
+or another network path. Keep `Convert images to JPEG 80% before upload` enabled in the extension
+settings.
+
+### Everything is stuck, the suggested tips do not help, the extension does not react, and Filexa is waiting without errors.
+
+Restarting SwarmUI usually fixes this; cancel the task in Filexa with `/cancel` first. If that
+still does not help, delete the extension and install the latest version from Git again.
 
 **Important: the developer and the bot do not have access to the user's computer. All operations
 with third-party software, downloaded models, and local configuration are performed by the user at

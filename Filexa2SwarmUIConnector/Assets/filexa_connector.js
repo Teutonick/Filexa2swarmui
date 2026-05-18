@@ -47,6 +47,9 @@
     if (data.last_duration_seconds) {
       lines.push(`Last duration: ${formatSeconds(data.last_duration_seconds)}`);
     }
+    if (data.upload_mode_hint) {
+      lines.push(`Upload mode cache: ${data.upload_mode_hint}`);
+    }
     if (data.last_error) {
       lines.push(`Last error: ${data.last_error}`);
     }

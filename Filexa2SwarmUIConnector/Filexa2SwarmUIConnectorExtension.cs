@@ -24,13 +24,19 @@ public class Filexa2SwarmUIConnectorExtension : Extension
     private const int MaxJsonResponseBytes = 1024 * 1024;
     private const int MaxImageBytes = 40 * 1024 * 1024;
     private const int UploadChunkBytes = 50 * 1024;
+    private const int UploadFastTextChunkBytes = 8 * 1024;
+    private const int UploadSafeTextChunkBytes = 4 * 1024;
     private const int CompressionStartBytes = 768 * 1024;
-    private const int UploadAttempts = 3;
+    private const string UploadModeTextFast = "text_fast";
+    private const string UploadModeTextSafe = "text_safe";
     private static readonly TimeSpan DirectUploadTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan ChunkUploadTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ChunkUploadTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan FilexaJsonTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan StatusUpdateTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan SwarmSessionTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan JsonChunkFastDelay = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan JsonChunkSafeDelay = TimeSpan.FromMilliseconds(750);
+    private static readonly TimeSpan UploadModeHintTtl = TimeSpan.FromHours(6);
     private const int UploadJpegQuality = 80;
     private static readonly Regex JobIdPattern = new("^[0-9a-f]{32}$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex ModelCodePattern = new("^[A-Za-z0-9][A-Za-z0-9 _./\\\\:\\-()]{0,199}$", RegexOptions.Compiled);
@@ -47,6 +53,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
     private static readonly TimeSpan PollDelay = TimeSpan.FromSeconds(10);
     private CancellationTokenSource? _cancel;
     private CancellationTokenSource? _activeTaskCancel;
+    private bool _activeTaskCancelRequested;
     private string _activeCancelPath = "";
     private Filexa2SwarmUIConnectorConfig _config = new();
 
@@ -138,6 +145,8 @@ public class Filexa2SwarmUIConnectorExtension : Extension
             ["last_error"] = _config.LastError,
             ["debug_logging"] = _config.DebugLogging,
             ["compress_images_before_upload"] = _config.CompressImagesBeforeUpload,
+            ["upload_mode_hint"] = ActiveUploadModeHint(),
+            ["upload_mode_hint_until_utc"] = _config.UploadModeHintUntilUtc,
             ["server_time_utc"] = DateTime.UtcNow.ToString("O"),
         });
     }
@@ -165,6 +174,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         _config.Enabled = enabled;
         _config.DebugLogging = debug_logging;
         _config.CompressImagesBeforeUpload = compress_images_before_upload;
+        ClearUploadModeHint(saveConfig: false);
         _config.Status = enabled ? "enabled" : "disabled";
         _config.LastEvent = enabled ? "Configuration saved" : "Connector disabled";
         _config.LastError = "";
@@ -175,11 +185,13 @@ public class Filexa2SwarmUIConnectorExtension : Extension
 
     public Task<JObject> DisconnectFilexa2SwarmUIConnector(Session session)
     {
+        _activeTaskCancelRequested = true;
         _activeTaskCancel?.Cancel();
         _config.Enabled = false;
         _config.Token = "";
         _config.DebugLogging = false;
         _config.CompressImagesBeforeUpload = true;
+        ClearUploadModeHint(saveConfig: false);
         _config.Status = "disabled";
         _config.LastEvent = "Disconnected";
         _config.LastError = "";
@@ -202,6 +214,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         _config.LastEvent = $"Cancel requested for task {jobId}";
         _config.LastError = "";
         SaveConfig(_config);
+        _activeTaskCancelRequested = true;
         _activeTaskCancel?.Cancel();
         string cancelPath = _activeCancelPath;
         if (!string.IsNullOrWhiteSpace(cancelPath))
@@ -324,7 +337,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
             ClearActiveJob();
             SaveConfig(_config);
         }
-        catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
+        catch (OperationCanceledException) when (!cancel.IsCancellationRequested && _activeTaskCancelRequested)
         {
             await ReportCancelSafe(task["cancel_url"]?.ToString() ?? "", "Canceled in Filexa2SwarmUI Connector", CancellationToken.None);
             _config.Status = _config.Enabled ? "idle" : "disabled";
@@ -333,6 +346,19 @@ public class Filexa2SwarmUIConnectorExtension : Extension
             ClearActiveJob();
             SaveConfig(_config);
             Logs.Warning($"[{ConnectorName}] Task {jobId} canceled");
+        }
+        catch (OperationCanceledException ex) when (!cancel.IsCancellationRequested)
+        {
+            string message = string.IsNullOrWhiteSpace(ex.Message)
+                ? "Task operation timed out"
+                : ex.Message;
+            await ReportFailureSafe(task["failure_url"]?.ToString() ?? "", message, CancellationToken.None);
+            _config.Status = "idle";
+            _config.LastEvent = $"Task {jobId} failed: {message}";
+            _config.LastError = message;
+            ClearActiveJob();
+            SaveConfig(_config);
+            Logs.Warning($"[{ConnectorName}] Task {jobId} failed: {message}");
         }
         catch (OperationCanceledException)
         {
@@ -368,6 +394,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
             if (ReferenceEquals(_activeTaskCancel, taskCancel))
             {
                 _activeTaskCancel = null;
+                _activeTaskCancelRequested = false;
             }
             _activeCancelPath = "";
         }
@@ -468,6 +495,21 @@ public class Filexa2SwarmUIConnectorExtension : Extension
 
     private async Task UploadResultWithRetry(JObject task, string path, UploadPayload image, DateTime deadline, CancellationToken cancel)
     {
+        string cachedUploadMode = ActiveUploadModeHint();
+        if (!string.IsNullOrWhiteSpace(cachedUploadMode))
+        {
+            DebugLog($"Using cached upload mode {cachedUploadMode} until {_config.UploadModeHintUntilUtc}");
+            await SetTaskStatus(
+                task,
+                "uploading JSON/base64 result",
+                $"Using cached upload mode {cachedUploadMode}",
+                94,
+                cancel
+            );
+            await UploadResultTextChunksAdaptive(task, path, image, deadline, cancel, cachedUploadMode);
+            return;
+        }
+
         try
         {
             await SetTaskStatus(
@@ -479,6 +521,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
             );
             DebugLog($"Upload attempt 1/1: bytes={image.Bytes.Length}, mime={image.MimeType}");
             await UploadResult(path, image.Bytes, image.MimeType, DirectUploadTimeout, cancel);
+            ClearUploadModeHint();
             return;
         }
         catch (FilexaUnauthorizedException)
@@ -487,15 +530,39 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         }
         catch (Exception ex) when (!cancel.IsCancellationRequested && IsTransient(ex) && DateTime.UtcNow + TimeSpan.FromSeconds(5) < deadline)
         {
-            DebugLog($"Direct upload failed, switching to chunked upload: {ex.Message}");
+            DebugLog($"Direct upload failed, switching to binary chunk upload: {ex.Message}");
             await PostTaskStatusSafe(
                 task["status_url"]?.ToString() ?? "",
-                "direct upload failed; switching to chunked upload",
+                "direct upload failed; switching to binary chunk upload",
                 94,
                 cancel
             );
         }
-        await UploadResultChunksWithRetry(task, path, image, deadline, cancel);
+        try
+        {
+            await UploadResultChunksWithRetry(task, path, image, deadline, cancel);
+            ClearUploadModeHint();
+            return;
+        }
+        catch (FilexaUnauthorizedException)
+        {
+            throw;
+        }
+        catch (FilexaHttpException ex) when (ex.StatusCode == HttpStatusCode.Gone)
+        {
+            throw;
+        }
+        catch (Exception ex) when (!cancel.IsCancellationRequested && IsTransient(ex) && DateTime.UtcNow + TimeSpan.FromSeconds(5) < deadline)
+        {
+            DebugLog($"Binary chunked upload failed, switching to JSON/base64 chunks: {ex.Message}");
+            await PostTaskStatusSafe(
+                task["status_url"]?.ToString() ?? "",
+                "binary chunk upload failed; switching to JSON/base64 chunks",
+                94,
+                cancel
+            );
+        }
+        await UploadResultTextChunksAdaptive(task, path, image, deadline, cancel);
     }
 
     private async Task UploadResult(string path, byte[] image, string mimeType, TimeSpan timeout, CancellationToken cancel)
@@ -523,6 +590,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         AbsoluteFilexaUrl(chunkBasePath);
         string uploadId = Guid.NewGuid().ToString("N");
         int chunkCount = Math.Max(1, (image.Bytes.Length + UploadChunkBytes - 1) / UploadChunkBytes);
+        int lastPostedProgress = -1;
         DebugLog($"Chunked upload started: upload_id={uploadId}, chunks={chunkCount}, bytes={image.Bytes.Length}, mime={image.MimeType}");
         for (int index = 0; index < chunkCount; index++)
         {
@@ -530,48 +598,19 @@ public class Filexa2SwarmUIConnectorExtension : Extension
             int length = Math.Min(UploadChunkBytes, image.Bytes.Length - offset);
             byte[] chunk = new byte[length];
             Buffer.BlockCopy(image.Bytes, offset, chunk, 0, length);
-            Exception? lastError = null;
-        for (int attempt = 1; attempt <= UploadAttempts; attempt++)
+            if (DateTime.UtcNow + TimeSpan.FromSeconds(5) >= deadline)
             {
-                if (DateTime.UtcNow + TimeSpan.FromSeconds(5) >= deadline)
-                {
-                    throw new TimeoutException("Filexa task deadline elapsed before upload completed");
-                }
-                try
-                {
-                    int progress = 94 + Math.Min(5, (int)Math.Floor(((double)(index + 1) / chunkCount) * 5));
-                    await SetTaskStatus(
-                        task,
-                        "uploading chunked result",
-                        $"Upload chunk {index + 1}/{chunkCount}, attempt {attempt}/{UploadAttempts} ({length} bytes)",
-                        progress,
-                        cancel
-                    );
-                    await UploadResultChunk(chunkBasePath, uploadId, index, chunkCount, image.Bytes.Length, image.MimeType, chunk, cancel);
-                    break;
-                }
-                catch (FilexaUnauthorizedException)
-                {
-                    throw;
-                }
-                catch (Exception ex) when (!cancel.IsCancellationRequested && IsTransient(ex) && DateTime.UtcNow + TimeSpan.FromSeconds(5) < deadline)
-                {
-                    lastError = ex;
-                    TimeSpan delay = BackoffDelay(attempt);
-                    await PostTaskStatusSafe(
-                        task["status_url"]?.ToString() ?? "",
-                        $"chunk upload retry after {ShortPreview(ex.Message, 80)}",
-                        94,
-                        cancel
-                    );
-                    DebugLog($"Chunk upload retry chunk={index + 1}/{chunkCount} attempt={attempt}: {ex.Message}; waiting {delay.TotalSeconds:0}s");
-                    await Task.Delay(delay, cancel);
-                }
-                if (attempt == UploadAttempts)
-                {
-                    throw new IOException($"Could not upload generated image chunk {index + 1}/{chunkCount}: {lastError?.Message ?? "upload failed"}");
-                }
+                throw new TimeoutException("Filexa task deadline elapsed before upload completed");
             }
+            int progress = 94 + Math.Min(5, (int)Math.Floor(((double)(index + 1) / chunkCount) * 5));
+            SetStatus("uploading chunked result", $"Upload chunk {index + 1}/{chunkCount} ({length} bytes)");
+            SaveConfig(_config);
+            if (index == 0 || index == chunkCount - 1 || progress != lastPostedProgress)
+            {
+                await PostTaskStatusSafe(task["status_url"]?.ToString() ?? "", "uploading chunked result", progress, cancel);
+                lastPostedProgress = progress;
+            }
+            await UploadResultChunk(chunkBasePath, uploadId, index, chunkCount, image.Bytes.Length, image.MimeType, chunk, cancel);
         }
         DebugLog($"Chunked upload completed: upload_id={uploadId}, chunks={chunkCount}");
     }
@@ -607,6 +646,141 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         using HttpResponseMessage response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeoutCancel.Token);
         await EnsureSuccess(response, authorizeFilexa: true, cancel);
         DebugLog($"Chunk upload response {index + 1}/{chunkCount}: {(int)response.StatusCode} {response.StatusCode}");
+    }
+
+    private async Task UploadResultTextChunksAdaptive(
+        JObject task,
+        string resultPath,
+        UploadPayload image,
+        DateTime deadline,
+        CancellationToken cancel,
+        string preferredMode = ""
+    )
+    {
+        bool preferSafe = preferredMode == UploadModeTextSafe;
+        if (!preferSafe)
+        {
+            try
+            {
+                await UploadResultTextChunksWithRetry(
+                    task,
+                    resultPath,
+                    image,
+                    deadline,
+                    cancel,
+                    UploadModeTextFast,
+                    UploadFastTextChunkBytes,
+                    JsonChunkFastDelay
+                );
+                RememberUploadMode(UploadModeTextFast);
+                return;
+            }
+            catch (FilexaUnauthorizedException)
+            {
+                throw;
+            }
+            catch (FilexaHttpException ex) when (ex.StatusCode == HttpStatusCode.Gone)
+            {
+                throw;
+            }
+            catch (Exception ex) when (!cancel.IsCancellationRequested && IsTransient(ex) && DateTime.UtcNow + TimeSpan.FromSeconds(5) < deadline)
+            {
+                DebugLog($"Fast JSON/base64 chunk upload failed, switching to safe JSON/base64 chunks: {ex.Message}");
+            }
+        }
+
+        await UploadResultTextChunksWithRetry(
+            task,
+            resultPath,
+            image,
+            deadline,
+            cancel,
+            UploadModeTextSafe,
+            UploadSafeTextChunkBytes,
+            JsonChunkSafeDelay
+        );
+        RememberUploadMode(UploadModeTextSafe);
+    }
+
+    private async Task UploadResultTextChunksWithRetry(
+        JObject task,
+        string resultPath,
+        UploadPayload image,
+        DateTime deadline,
+        CancellationToken cancel,
+        string mode,
+        int chunkBytes,
+        TimeSpan interChunkDelay
+    )
+    {
+        string chunkBasePath = task["result_text_chunk_upload_url"]?.ToString() ?? $"{resultPath.TrimEnd('/')}/text-chunks";
+        AbsoluteFilexaUrl(chunkBasePath);
+        string uploadId = Guid.NewGuid().ToString("N");
+        int chunkCount = Math.Max(1, (image.Bytes.Length + chunkBytes - 1) / chunkBytes);
+        DebugLog($"JSON/base64 chunk upload started: mode={mode}, upload_id={uploadId}, chunks={chunkCount}, chunk_bytes={chunkBytes}, bytes={image.Bytes.Length}, mime={image.MimeType}");
+        for (int index = 0; index < chunkCount; index++)
+        {
+            int offset = index * chunkBytes;
+            int length = Math.Min(chunkBytes, image.Bytes.Length - offset);
+            byte[] chunk = new byte[length];
+            Buffer.BlockCopy(image.Bytes, offset, chunk, 0, length);
+            if (DateTime.UtcNow + TimeSpan.FromSeconds(5) >= deadline)
+            {
+                throw new TimeoutException("Filexa task deadline elapsed before upload completed");
+            }
+            SetStatus("uploading JSON/base64 result", $"Upload JSON chunk {index + 1}/{chunkCount} ({length} bytes, {mode})");
+            SaveConfig(_config);
+            try
+            {
+                await UploadResultTextChunk(chunkBasePath, uploadId, index, chunkCount, image.Bytes.Length, image.MimeType, chunk, cancel);
+            }
+            catch (OperationCanceledException ex) when (!cancel.IsCancellationRequested)
+            {
+                string message = $"JSON chunk {index + 1}/{chunkCount} timed out after {ChunkUploadTimeout.TotalSeconds:0}s ({mode})";
+                DebugLog(message);
+                throw new IOException(message, ex);
+            }
+            catch (Exception ex) when (!cancel.IsCancellationRequested)
+            {
+                DebugLog($"JSON chunk {index + 1}/{chunkCount} failed ({mode}): {ex.Message}");
+                throw;
+            }
+            if (index + 1 < chunkCount)
+            {
+                await Task.Delay(interChunkDelay, cancel);
+            }
+        }
+        DebugLog($"JSON/base64 chunk upload completed: mode={mode}, upload_id={uploadId}, chunks={chunkCount}");
+    }
+
+    private async Task UploadResultTextChunk(
+        string chunkBasePath,
+        string uploadId,
+        int index,
+        int chunkCount,
+        int totalBytes,
+        string mimeType,
+        byte[] chunk,
+        CancellationToken cancel
+    )
+    {
+        JObject body = new()
+        {
+            ["upload_id"] = uploadId,
+            ["index"] = index,
+            ["chunk_count"] = chunkCount,
+            ["total_bytes"] = totalBytes,
+            ["mime_type"] = mimeType,
+            ["data_b64"] = Convert.ToBase64String(chunk),
+        };
+        await PostJson(
+            AbsoluteFilexaUrl($"{chunkBasePath.TrimEnd('/')}/{index}"),
+            body,
+            cancel,
+            timeout: ChunkUploadTimeout,
+            connectionClose: true
+        );
+        DebugLog($"JSON chunk upload response {index + 1}/{chunkCount}");
     }
 
     private async Task ReportFailureSafe(string path, string error, CancellationToken cancel)
@@ -695,16 +869,23 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         JObject body,
         CancellationToken cancel,
         bool authorizeFilexa = true,
-        TimeSpan? timeout = null
+        TimeSpan? timeout = null,
+        bool connectionClose = false
     )
     {
         using HttpRequestMessage request = new(HttpMethod.Post, url);
+        request.Version = HttpVersion.Version11;
+        request.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
         request.Headers.ExpectContinue = false;
+        if (connectionClose)
+        {
+            request.Headers.ConnectionClose = true;
+        }
         if (authorizeFilexa)
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _config.Token);
         }
-        request.Content = new StringContent(body.ToString(), Encoding.UTF8, "application/json");
+        request.Content = new StringContent(body.ToString(Newtonsoft.Json.Formatting.None), Encoding.UTF8, "application/json");
         CancellationTokenSource? timeoutCancel = null;
         try
         {
@@ -852,6 +1033,10 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         if (!string.IsNullOrWhiteSpace(task["result_chunk_upload_url"]?.ToString()))
         {
             AbsoluteFilexaUrl(task["result_chunk_upload_url"]!.ToString());
+        }
+        if (!string.IsNullOrWhiteSpace(task["result_text_chunk_upload_url"]?.ToString()))
+        {
+            AbsoluteFilexaUrl(task["result_text_chunk_upload_url"]!.ToString());
         }
         AbsoluteFilexaUrl(task["failure_url"]?.ToString() ?? "");
         if (!string.IsNullOrWhiteSpace(task["status_url"]?.ToString()))
@@ -1029,6 +1214,49 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         return $"{uri.Scheme}://{uri.Authority}{uri.AbsolutePath.TrimEnd('/')}";
     }
 
+    private string ActiveUploadModeHint()
+    {
+        if (!IsKnownUploadMode(_config.UploadModeHint))
+        {
+            return "";
+        }
+        if (DateTimeOffset.TryParse(_config.UploadModeHintUntilUtc, out DateTimeOffset until)
+            && until.UtcDateTime > DateTime.UtcNow)
+        {
+            return _config.UploadModeHint;
+        }
+        ClearUploadModeHint();
+        return "";
+    }
+
+    private void RememberUploadMode(string mode)
+    {
+        if (!IsKnownUploadMode(mode))
+        {
+            return;
+        }
+        _config.UploadModeHint = mode;
+        _config.UploadModeHintUntilUtc = DateTime.UtcNow.Add(UploadModeHintTtl).ToString("O");
+        SaveConfig(_config);
+        DebugLog($"Cached upload mode {mode} until {_config.UploadModeHintUntilUtc}");
+    }
+
+    private void ClearUploadModeHint(bool saveConfig = true)
+    {
+        if (string.IsNullOrWhiteSpace(_config.UploadModeHint) && string.IsNullOrWhiteSpace(_config.UploadModeHintUntilUtc))
+        {
+            return;
+        }
+        _config.UploadModeHint = "";
+        _config.UploadModeHintUntilUtc = "";
+        if (saveConfig)
+        {
+            SaveConfig(_config);
+        }
+    }
+
+    private static bool IsKnownUploadMode(string mode) => mode is UploadModeTextFast or UploadModeTextSafe;
+
     private void StopAfterUnauthorized(string message)
     {
         _config.Enabled = false;
@@ -1064,6 +1292,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         _config.Status = "task received";
         _config.LastEvent = $"Task {jobId} received";
         _activeCancelPath = task["cancel_url"]?.ToString() ?? "";
+        _activeTaskCancelRequested = false;
     }
 
     private void SetStatus(string status, string lastEvent)
@@ -1187,6 +1416,8 @@ public class Filexa2SwarmUIConnectorConfig
     public string LastError { get; set; } = "";
     public bool DebugLogging { get; set; }
     public bool CompressImagesBeforeUpload { get; set; } = true;
+    public string UploadModeHint { get; set; } = "";
+    public string UploadModeHintUntilUtc { get; set; } = "";
 }
 
 public class UploadPayload

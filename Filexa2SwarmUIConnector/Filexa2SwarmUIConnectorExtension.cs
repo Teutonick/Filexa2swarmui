@@ -17,7 +17,7 @@ namespace Filexa.Extensions.Filexa2SwarmUIConnector;
 
 public class Filexa2SwarmUIConnectorExtension : Extension
 {
-    private const string ConnectorVersion = "1.4";
+    private const string ConnectorVersion = "1.5";
     private const string ConnectorName = "Filexa2SwarmUI Connector";
     private const int MaxPromptChars = 8000;
     private const int MaxReferenceCount = 4;
@@ -28,7 +28,6 @@ public class Filexa2SwarmUIConnectorExtension : Extension
     private const int UploadChunkBytes = 50 * 1024;
     private const int UploadFastTextChunkBytes = 8 * 1024;
     private const int UploadSafeTextChunkBytes = 4 * 1024;
-    private const int CompressionStartBytes = 768 * 1024;
     private const string UploadModeTextFast = "text_fast";
     private const string UploadModeTextSafe = "text_safe";
     private static readonly TimeSpan DirectUploadTimeout = TimeSpan.FromSeconds(10);
@@ -535,21 +534,21 @@ public class Filexa2SwarmUIConnectorExtension : Extension
     private UploadPayload PrepareUploadPayload(byte[] image, bool forceJpeg = false)
     {
         string originalMime = DetectImageMime(image);
-        if (!forceJpeg && (!_config.CompressImagesBeforeUpload || image.Length < CompressionStartBytes))
+        if (!forceJpeg && !_config.CompressImagesBeforeUpload)
         {
-            return new UploadPayload(image, originalMime);
+            return new UploadPayload(image, originalMime, convertedToJpeg: false);
         }
         try
         {
             byte[] jpeg = ConvertToJpeg(image, UploadJpegQuality);
             DebugLog($"Converted image to JPEG before upload: {image.Length} -> {jpeg.Length} bytes, jpeg quality={UploadJpegQuality}, forced={forceJpeg}");
-            return new UploadPayload(jpeg, "image/jpeg");
+            return new UploadPayload(jpeg, "image/jpeg", convertedToJpeg: true);
         }
         catch (Exception ex)
         {
             DebugLog($"JPEG conversion skipped: {ex.Message}");
         }
-        return new UploadPayload(image, originalMime);
+        return new UploadPayload(image, originalMime, convertedToJpeg: false);
     }
 
     private static byte[] ConvertToJpeg(byte[] image, int quality)
@@ -568,6 +567,22 @@ public class Filexa2SwarmUIConnectorExtension : Extension
             throw new LocalOnlyCompletionException(
                 "Generated image is larger than 40 MiB after configured conversion; keeping it on this PC. Enable JPEG conversion or reduce output size to send it to Filexa."
             );
+        }
+        string cachedUploadMode = ActiveUploadModeHint();
+        if (!string.IsNullOrWhiteSpace(cachedUploadMode))
+        {
+            UploadPayload cachedUpload = PrepareFallbackUploadPayload(originalImage, directUpload);
+            EnsureChunkFallbackFits(cachedUpload);
+            DebugLog($"Using cached upload mode {cachedUploadMode} until {_config.UploadModeHintUntilUtc}");
+            await SetTaskStatus(
+                task,
+                "uploading JSON/base64 result",
+                $"Using cached upload mode {cachedUploadMode}",
+                94,
+                cancel
+            );
+            await UploadResultTextChunksAdaptive(task, path, cachedUpload, deadline, cancel, cachedUploadMode);
+            return;
         }
         try
         {
@@ -589,21 +604,19 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         }
         catch (Exception ex) when (!cancel.IsCancellationRequested && IsTransient(ex) && DateTime.UtcNow + TimeSpan.FromSeconds(5) < deadline)
         {
-            Logs.Warning($"[{ConnectorName}] Direct Filexa upload failed ({ex.Message}); forcing JPEG conversion before chunk fallback.");
+            string fallbackMessage = directUpload.ConvertedToJpeg
+                ? "direct upload failed; using already converted JPEG"
+                : "direct upload failed; forcing JPEG conversion";
+            Logs.Warning($"[{ConnectorName}] Direct Filexa upload failed ({ex.Message}); {fallbackMessage} before chunk fallback.");
             await PostTaskStatusSafe(
                 task["status_url"]?.ToString() ?? "",
-                "direct upload failed; forcing JPEG conversion",
+                fallbackMessage,
                 94,
                 cancel
             );
         }
-        UploadPayload fallbackUpload = PrepareUploadPayload(originalImage, forceJpeg: true);
-        if (fallbackUpload.Bytes.Length > MaxChunkUploadImageBytes)
-        {
-            string message = $"Direct upload failed and JPEG fallback is still {fallbackUpload.Bytes.Length} bytes (> {MaxChunkUploadImageBytes}); keeping result on this PC. Network is probably too unstable for a large upload.";
-            Logs.Warning($"[{ConnectorName}] {message}");
-            throw new LocalOnlyCompletionException(message);
-        }
+        UploadPayload fallbackUpload = PrepareFallbackUploadPayload(originalImage, directUpload);
+        EnsureChunkFallbackFits(fallbackUpload);
         Logs.Warning($"[{ConnectorName}] Chunk fallback allowed for compressed result: {fallbackUpload.Bytes.Length} bytes.");
         try
         {
@@ -630,6 +643,26 @@ public class Filexa2SwarmUIConnectorExtension : Extension
             );
         }
         await UploadResultTextChunksAdaptive(task, path, fallbackUpload, deadline, cancel);
+    }
+
+    private UploadPayload PrepareFallbackUploadPayload(byte[] originalImage, UploadPayload directUpload)
+    {
+        if (directUpload.ConvertedToJpeg || _config.CompressImagesBeforeUpload)
+        {
+            return directUpload;
+        }
+        return PrepareUploadPayload(originalImage, forceJpeg: true);
+    }
+
+    private static void EnsureChunkFallbackFits(UploadPayload upload)
+    {
+        if (upload.Bytes.Length <= MaxChunkUploadImageBytes)
+        {
+            return;
+        }
+        string message = $"Fallback upload payload is {upload.Bytes.Length} bytes (> {MaxChunkUploadImageBytes}); keeping result on this PC. Network is probably too unstable for a large upload.";
+        Logs.Warning($"[{ConnectorName}] {message}");
+        throw new LocalOnlyCompletionException(message);
     }
 
     private async Task UploadResult(string path, byte[] image, string mimeType, TimeSpan timeout, CancellationToken cancel)
@@ -1544,14 +1577,16 @@ public class Filexa2SwarmUIConnectorConfig
 
 public class UploadPayload
 {
-    public UploadPayload(byte[] bytes, string mimeType)
+    public UploadPayload(byte[] bytes, string mimeType, bool convertedToJpeg)
     {
         Bytes = bytes;
         MimeType = mimeType;
+        ConvertedToJpeg = convertedToJpeg;
     }
 
     public byte[] Bytes { get; }
     public string MimeType { get; }
+    public bool ConvertedToJpeg { get; }
 }
 
 public class LocalOnlyCompletionException : Exception

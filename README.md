@@ -62,12 +62,14 @@ reference inside this extension; duplicate references can make SwarmUI restore f
   generation when Filexa returns a task.
 - Direct result upload is capped at 40 MiB. If the generated file is larger than that, the
   connector keeps it on this PC and reports completion to Filexa without uploading image bytes.
-- If direct upload fails, the connector forces JPEG conversion at 80% quality. Compressed results
-  up to 3 MiB use fallback uploads: 50 KB binary chunks, then 8 KB paced JSON/base64 chunks, and
-  finally a safe 4 KB JSON/base64 mode without long per-mode retry loops. If the compressed result
-  is still larger than 3 MiB, the connector keeps it on this PC and reports completion instead of
-  spending ages on a doomed upload. The slowest safe JSON/base64 upload uses `Connection: close`
-  and pauses between chunks.
+- If direct upload fails, fallback uses a JPEG payload at 80% quality, reusing an already converted
+  direct payload when compression was enabled. Compressed results up to 3 MiB use fallback uploads:
+  50 KB binary chunks, then 8 KB paced JSON/base64 chunks, and finally a safe 4 KB JSON/base64 mode
+  without long per-mode retry loops. If the compressed result is still larger than 3 MiB, the
+  connector keeps it on this PC and reports completion instead of spending ages on a doomed upload.
+  The slowest safe JSON/base64 upload uses `Connection: close` and pauses between chunks. A
+  successful JSON/base64 mode is cached locally for several hours; while the cache is active, the
+  connector skips direct upload and goes straight to the cached text mode.
 - The `Cancel active task` button asks Filexa to cancel the current task and returns the connector
   to polling for new tasks.
 

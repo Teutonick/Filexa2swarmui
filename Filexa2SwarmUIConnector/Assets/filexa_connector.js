@@ -51,10 +51,21 @@
     if (data.upload_mode_hint) {
       lines.push(`Upload mode cache: ${data.upload_mode_hint}`);
     }
+    if (data.reference_download_mode_hint) {
+      lines.push(`Reference download cache: ${data.reference_download_mode_hint}`);
+    }
     if (data.last_error) {
       lines.push(`Last error: ${data.last_error}`);
     }
     return lines.join("\n");
+  }
+
+  function updateNetworkNote(data) {
+    const note = document.getElementById("filexa_network_note");
+    if (!note) {
+      return;
+    }
+    note.hidden = !(data.upload_mode_hint || data.reference_download_mode_hint);
   }
 
   async function refreshStatus({ updateFields } = { updateFields: false }) {
@@ -72,6 +83,7 @@
         document.getElementById("filexa_compress_images_before_upload").checked = data.compress_images_before_upload !== false;
         document.getElementById("filexa_keep_result_on_pc_only").checked = !!data.keep_result_on_pc_only;
       }
+      updateNetworkNote(data);
       status.textContent = renderStatus(data);
     } catch (error) {
       status.textContent = `Could not read connector status: ${error.message}`;
@@ -99,6 +111,7 @@
         keep_result_on_pc_only: document.getElementById("filexa_keep_result_on_pc_only").checked,
       });
       document.getElementById("filexa_token").value = "";
+      updateNetworkNote(data);
       status.textContent = renderStatus(data);
     } catch (error) {
       status.textContent = `Save failed: ${error.message}`;
@@ -120,6 +133,7 @@
     const status = document.getElementById("filexa_status");
     try {
       const data = await callFilexaApi("CancelFilexa2SwarmUIConnectorTask", {});
+      updateNetworkNote(data);
       status.textContent = renderStatus(data);
     } catch (error) {
       status.textContent = `Cancel failed: ${error.message}`;

@@ -17,7 +17,7 @@ namespace Filexa.Extensions.Filexa2SwarmUIConnector;
 
 public class Filexa2SwarmUIConnectorExtension : Extension
 {
-    private const string ConnectorVersion = "1.5";
+    private const string ConnectorVersion = "1.6";
     private const string ConnectorName = "Filexa2SwarmUI Connector";
     private const int MaxPromptChars = 8000;
     private const int MaxReferenceCount = 4;
@@ -30,14 +30,19 @@ public class Filexa2SwarmUIConnectorExtension : Extension
     private const int UploadSafeTextChunkBytes = 4 * 1024;
     private const string UploadModeTextFast = "text_fast";
     private const string UploadModeTextSafe = "text_safe";
+    private const string ReferenceDownloadModeText = "text";
     private static readonly TimeSpan DirectUploadTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ChunkUploadTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan FilexaJsonTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan StatusUpdateTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan SwarmSessionTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ReferenceDownloadTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan JsonChunkFastDelay = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan JsonChunkSafeDelay = TimeSpan.FromMilliseconds(750);
     private static readonly TimeSpan UploadModeHintTtl = TimeSpan.FromHours(6);
+    private static readonly TimeSpan ReferenceDownloadModeHintTtl = TimeSpan.FromHours(1);
+    private const int ReferenceDirectDownloadAttempts = 2;
+    private const int ReferenceTextChunkAttempts = 3;
     private const int UploadJpegQuality = 80;
     private static readonly Regex JobIdPattern = new("^[0-9a-f]{32}$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex ModelCodePattern = new("^[A-Za-z0-9][A-Za-z0-9 _./\\\\:\\-()]{0,199}$", RegexOptions.Compiled);
@@ -149,6 +154,8 @@ public class Filexa2SwarmUIConnectorExtension : Extension
             ["keep_result_on_pc_only"] = _config.KeepResultOnPcOnly,
             ["upload_mode_hint"] = ActiveUploadModeHint(),
             ["upload_mode_hint_until_utc"] = _config.UploadModeHintUntilUtc,
+            ["reference_download_mode_hint"] = ActiveReferenceDownloadModeHint(),
+            ["reference_download_mode_hint_until_utc"] = _config.ReferenceDownloadModeHintUntilUtc,
             ["server_time_utc"] = DateTime.UtcNow.ToString("O"),
         });
     }
@@ -179,6 +186,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         _config.CompressImagesBeforeUpload = compress_images_before_upload;
         _config.KeepResultOnPcOnly = keep_result_on_pc_only;
         ClearUploadModeHint(saveConfig: false);
+        ClearReferenceDownloadModeHint(saveConfig: false);
         _config.Status = enabled ? "enabled" : "disabled";
         _config.LastEvent = enabled ? "Configuration saved" : "Connector disabled";
         _config.LastError = "";
@@ -197,6 +205,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         _config.CompressImagesBeforeUpload = true;
         _config.KeepResultOnPcOnly = false;
         ClearUploadModeHint(saveConfig: false);
+        ClearReferenceDownloadModeHint(saveConfig: false);
         _config.Status = "disabled";
         _config.LastEvent = "Disconnected";
         _config.LastError = "";
@@ -432,6 +441,13 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         }
         finally
         {
+            if (!cancel.IsCancellationRequested && _config.ActiveJobId == jobId)
+            {
+                _config.Status = _config.Enabled ? "idle" : "disabled";
+                ClearActiveJob();
+                SaveConfig(_config);
+                Logs.Warning($"[{ConnectorName}] Task {jobId} active state was reset in finalizer");
+            }
             if (ReferenceEquals(_activeTaskCancel, taskCancel))
             {
                 _activeTaskCancel = null;
@@ -459,14 +475,221 @@ public class Filexa2SwarmUIConnectorExtension : Extension
                 throw new InvalidDataException("Invalid reference descriptor");
             }
             string url = AbsoluteFilexaUrl(item["url"]?.ToString() ?? "");
+            string textChunkUrl = AbsoluteFilexaUrl(
+                item["text_chunk_url"]?.ToString()
+                    ?? $"{item["url"]?.ToString()?.TrimEnd('/')}/text-chunks"
+            );
             string mime = ValidateImageMime(item["mime_type"]?.ToString() ?? "image/jpeg");
-            byte[] bytes = await GetBytes(url, cancel, authorizeFilexa: true, maxBytes: MaxUploadImageBytes);
+            byte[] bytes = await DownloadReferenceBytes(url, textChunkUrl, mime, task, i, references.Count, cancel);
             DebugLog($"Downloaded reference {i}: mime={mime}, bytes={bytes.Length}");
             dataUrls.Add($"data:{mime};base64,{Convert.ToBase64String(bytes)}");
             await SetTaskStatus(task, "downloading references", $"Downloaded reference {i + 1}/{references.Count}", 18 + (i + 1) * 3, cancel);
         }
         parameters["promptimages"] = dataUrls;
         SetStatus("references ready", $"Downloaded {references.Count} reference image(s)");
+    }
+
+    private async Task<byte[]> DownloadReferenceBytes(
+        string url,
+        string textChunkUrl,
+        string expectedMime,
+        JObject task,
+        int index,
+        int count,
+        CancellationToken cancel
+    )
+    {
+        Exception? lastError = null;
+        string cachedReferenceMode = ActiveReferenceDownloadModeHint();
+        if (cachedReferenceMode == ReferenceDownloadModeText)
+        {
+            DebugLog($"Using cached reference download mode {cachedReferenceMode} until {_config.ReferenceDownloadModeHintUntilUtc}");
+            await PostTaskStatusSafe(
+                task["status_url"]?.ToString() ?? "",
+                $"reference chunk mode {index + 1}/{count}",
+                18 + (index + 1) * 2,
+                cancel
+            );
+            return await DownloadReferenceTextChunks(textChunkUrl, expectedMime, task, index, count, cancel, lastError);
+        }
+        for (int attempt = 1; attempt <= ReferenceDirectDownloadAttempts; attempt++)
+        {
+            try
+            {
+                SetStatus(
+                    "downloading references",
+                    $"Downloading reference {index + 1}/{count}, attempt {attempt}/{ReferenceDirectDownloadAttempts}"
+                );
+                SaveConfig(_config);
+                byte[] directBytes = await GetBytes(
+                    url,
+                    cancel,
+                    authorizeFilexa: true,
+                    maxBytes: MaxUploadImageBytes,
+                    timeout: ReferenceDownloadTimeout,
+                    connectionClose: true
+                );
+                if (attempt > 1)
+                {
+                    Logs.Info($"[{ConnectorName}] Reference {index + 1}/{count} downloaded after retry attempt {attempt}");
+                }
+                return directBytes;
+            }
+            catch (FilexaUnauthorizedException)
+            {
+                throw;
+            }
+            catch (InvalidDataException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (!cancel.IsCancellationRequested && IsTransient(ex))
+            {
+                lastError = ex;
+                Logs.Warning($"[{ConnectorName}] Reference {index + 1}/{count} direct download attempt {attempt}/{ReferenceDirectDownloadAttempts} failed: {ex.Message}");
+                if (attempt >= ReferenceDirectDownloadAttempts)
+                {
+                    break;
+                }
+                await PostTaskStatusSafe(
+                    task["status_url"]?.ToString() ?? "",
+                    $"retrying reference download {index + 1}/{count}",
+                    18 + (index + 1) * 2,
+                    cancel
+                );
+                await Task.Delay(ReferenceRetryDelay(attempt), cancel);
+            }
+        }
+        Logs.Warning($"[{ConnectorName}] Reference {index + 1}/{count} direct download failed; switching to JSON/base64 chunk fallback.");
+        await PostTaskStatusSafe(
+            task["status_url"]?.ToString() ?? "",
+            $"reference chunk fallback {index + 1}/{count}",
+            18 + (index + 1) * 2,
+            cancel
+        );
+        byte[] chunkedBytes = await DownloadReferenceTextChunks(textChunkUrl, expectedMime, task, index, count, cancel, lastError);
+        RememberReferenceDownloadMode(ReferenceDownloadModeText);
+        return chunkedBytes;
+    }
+
+    private async Task<byte[]> DownloadReferenceTextChunks(
+        string textChunkUrl,
+        string expectedMime,
+        JObject task,
+        int referenceIndex,
+        int referenceCount,
+        CancellationToken cancel,
+        Exception? directError
+    )
+    {
+        List<byte[]> chunks = new();
+        int chunkCount = -1;
+        int totalBytes = -1;
+        for (int chunkIndex = 0; chunkCount < 0 || chunkIndex < chunkCount; chunkIndex++)
+        {
+            JObject chunk = await GetReferenceTextChunk(textChunkUrl, chunkIndex, referenceIndex, referenceCount, cancel);
+            int bodyIndex = chunk["index"]?.Value<int>() ?? -1;
+            if (bodyIndex != chunkIndex)
+            {
+                throw new InvalidDataException("Reference text chunk index mismatch");
+            }
+            int currentChunkCount = chunk["chunk_count"]?.Value<int>() ?? 0;
+            int currentTotalBytes = chunk["total_bytes"]?.Value<int>() ?? 0;
+            string mime = ValidateImageMime(chunk["mime_type"]?.ToString() ?? "");
+            if (!string.Equals(mime, expectedMime, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("Reference text chunk MIME mismatch");
+            }
+            if (currentChunkCount < 1 || currentTotalBytes < 1 || currentTotalBytes > MaxUploadImageBytes)
+            {
+                throw new InvalidDataException("Invalid reference text chunk metadata");
+            }
+            if (chunkCount < 0)
+            {
+                chunkCount = currentChunkCount;
+                totalBytes = currentTotalBytes;
+            }
+            else if (chunkCount != currentChunkCount || totalBytes != currentTotalBytes)
+            {
+                throw new InvalidDataException("Reference text chunk metadata changed");
+            }
+            string dataB64 = chunk["data_b64"]?.ToString() ?? "";
+            byte[] data = Convert.FromBase64String(dataB64);
+            chunks.Add(data);
+            int receivedBytes = chunks.Sum(part => part.Length);
+            if (receivedBytes > totalBytes)
+            {
+                throw new InvalidDataException("Reference text chunks are too large");
+            }
+            if (chunkIndex == 0 || chunkIndex + 1 == chunkCount)
+            {
+                await PostTaskStatusSafe(
+                    task["status_url"]?.ToString() ?? "",
+                    $"reference chunk {referenceIndex + 1}/{referenceCount}",
+                    18 + (referenceIndex + 1) * 2,
+                    cancel
+                );
+            }
+        }
+        byte[] assembled = CombineChunks(chunks, totalBytes);
+        if (assembled.Length != totalBytes)
+        {
+            throw new InvalidDataException("Reference text chunk size mismatch");
+        }
+        Logs.Info($"[{ConnectorName}] Reference {referenceIndex + 1}/{referenceCount} downloaded via JSON/base64 chunks after direct failure: {directError?.Message ?? "unknown"}");
+        return assembled;
+    }
+
+    private async Task<JObject> GetReferenceTextChunk(
+        string textChunkUrl,
+        int chunkIndex,
+        int referenceIndex,
+        int referenceCount,
+        CancellationToken cancel
+    )
+    {
+        Exception? lastError = null;
+        for (int attempt = 1; attempt <= ReferenceTextChunkAttempts; attempt++)
+        {
+            try
+            {
+                return await GetJson(
+                    $"{textChunkUrl.TrimEnd('/')}/{chunkIndex}",
+                    cancel,
+                    authorizeFilexa: true,
+                    timeout: FilexaJsonTimeout,
+                    connectionClose: true
+                );
+            }
+            catch (FilexaUnauthorizedException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (!cancel.IsCancellationRequested && IsTransient(ex))
+            {
+                lastError = ex;
+                Logs.Warning($"[{ConnectorName}] Reference {referenceIndex + 1}/{referenceCount} text chunk {chunkIndex + 1} attempt {attempt}/{ReferenceTextChunkAttempts} failed: {ex.Message}");
+                if (attempt >= ReferenceTextChunkAttempts)
+                {
+                    break;
+                }
+                await Task.Delay(JsonChunkFastDelay, cancel);
+            }
+        }
+        throw new IOException(
+            $"Could not download reference {referenceIndex + 1}/{referenceCount} text chunk {chunkIndex + 1}: {lastError?.Message ?? "unknown error"}",
+            lastError
+        );
+    }
+
+    private static byte[] CombineChunks(List<byte[]> chunks, int totalBytes)
+    {
+        using MemoryStream output = new(totalBytes);
+        foreach (byte[] chunk in chunks)
+        {
+            output.Write(chunk, 0, chunk.Length);
+        }
+        return output.ToArray();
     }
 
     private async Task<string> GetSwarmSession(CancellationToken cancel)
@@ -1044,17 +1267,76 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         }
     }
 
-    private async Task<byte[]> GetBytes(string url, CancellationToken cancel, bool authorizeFilexa, int maxBytes)
+    private async Task<JObject> GetJson(
+        string url,
+        CancellationToken cancel,
+        bool authorizeFilexa,
+        TimeSpan timeout,
+        bool connectionClose = false
+    )
     {
         using HttpRequestMessage request = new(HttpMethod.Get, url);
+        request.Version = HttpVersion.Version11;
+        request.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
         request.Headers.ExpectContinue = false;
+        if (connectionClose)
+        {
+            request.Headers.ConnectionClose = true;
+        }
         if (authorizeFilexa)
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _config.Token);
         }
-        using HttpResponseMessage response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel);
-        await EnsureSuccess(response, authorizeFilexa, cancel);
-        return await ReadBytesLimited(response.Content, maxBytes, cancel);
+        using CancellationTokenSource timeoutCancel = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        timeoutCancel.CancelAfter(timeout);
+        using HttpResponseMessage response = await Http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            timeoutCancel.Token
+        );
+        await EnsureSuccess(response, authorizeFilexa, timeoutCancel.Token);
+        string text = await ReadStringLimited(response.Content, MaxJsonResponseBytes, timeoutCancel.Token);
+        return string.IsNullOrWhiteSpace(text) ? new JObject() : JObject.Parse(text);
+    }
+
+    private async Task<byte[]> GetBytes(
+        string url,
+        CancellationToken cancel,
+        bool authorizeFilexa,
+        int maxBytes,
+        TimeSpan? timeout = null,
+        bool connectionClose = false
+    )
+    {
+        using HttpRequestMessage request = new(HttpMethod.Get, url);
+        request.Version = HttpVersion.Version11;
+        request.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
+        request.Headers.ExpectContinue = false;
+        if (connectionClose)
+        {
+            request.Headers.ConnectionClose = true;
+        }
+        if (authorizeFilexa)
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _config.Token);
+        }
+        CancellationTokenSource? timeoutCancel = null;
+        try
+        {
+            if (timeout is not null)
+            {
+                timeoutCancel = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+                timeoutCancel.CancelAfter(timeout.Value);
+            }
+            CancellationToken effectiveCancel = timeoutCancel?.Token ?? cancel;
+            using HttpResponseMessage response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, effectiveCancel);
+            await EnsureSuccess(response, authorizeFilexa, effectiveCancel);
+            return await ReadBytesLimited(response.Content, maxBytes, effectiveCancel);
+        }
+        finally
+        {
+            timeoutCancel?.Dispose();
+        }
     }
 
     private async Task EnsureSuccess(HttpResponseMessage response, bool authorizeFilexa, CancellationToken cancel)
@@ -1203,6 +1485,10 @@ public class Filexa2SwarmUIConnectorExtension : Extension
                     throw new InvalidDataException("Invalid Filexa reference descriptor");
                 }
                 AbsoluteFilexaUrl(reference["url"]?.ToString() ?? "");
+                if (!string.IsNullOrWhiteSpace(reference["text_chunk_url"]?.ToString()))
+                {
+                    AbsoluteFilexaUrl(reference["text_chunk_url"]!.ToString());
+                }
                 ValidateImageMime(reference["mime_type"]?.ToString() ?? "image/jpeg");
             }
         }
@@ -1400,6 +1686,50 @@ public class Filexa2SwarmUIConnectorExtension : Extension
 
     private static bool IsKnownUploadMode(string mode) => mode is UploadModeTextFast or UploadModeTextSafe;
 
+    private string ActiveReferenceDownloadModeHint()
+    {
+        if (!IsKnownReferenceDownloadMode(_config.ReferenceDownloadModeHint))
+        {
+            return "";
+        }
+        if (DateTimeOffset.TryParse(_config.ReferenceDownloadModeHintUntilUtc, out DateTimeOffset until)
+            && until.UtcDateTime > DateTime.UtcNow)
+        {
+            return _config.ReferenceDownloadModeHint;
+        }
+        ClearReferenceDownloadModeHint();
+        return "";
+    }
+
+    private void RememberReferenceDownloadMode(string mode)
+    {
+        if (!IsKnownReferenceDownloadMode(mode))
+        {
+            return;
+        }
+        _config.ReferenceDownloadModeHint = mode;
+        _config.ReferenceDownloadModeHintUntilUtc = DateTime.UtcNow.Add(ReferenceDownloadModeHintTtl).ToString("O");
+        SaveConfig(_config);
+        DebugLog($"Cached reference download mode {mode} until {_config.ReferenceDownloadModeHintUntilUtc}");
+    }
+
+    private void ClearReferenceDownloadModeHint(bool saveConfig = true)
+    {
+        if (string.IsNullOrWhiteSpace(_config.ReferenceDownloadModeHint)
+            && string.IsNullOrWhiteSpace(_config.ReferenceDownloadModeHintUntilUtc))
+        {
+            return;
+        }
+        _config.ReferenceDownloadModeHint = "";
+        _config.ReferenceDownloadModeHintUntilUtc = "";
+        if (saveConfig)
+        {
+            SaveConfig(_config);
+        }
+    }
+
+    private static bool IsKnownReferenceDownloadMode(string mode) => mode is ReferenceDownloadModeText;
+
     private void StopAfterUnauthorized(string message)
     {
         _config.Enabled = false;
@@ -1463,6 +1793,12 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         }
         int seconds = Math.Min(120, 5 * (int)Math.Pow(2, Math.Min(5, consecutiveErrors - 1)));
         return TimeSpan.FromSeconds(seconds);
+    }
+
+    private static TimeSpan ReferenceRetryDelay(int attempt)
+    {
+        int milliseconds = Math.Min(6000, 1000 + attempt * 1500);
+        return TimeSpan.FromMilliseconds(milliseconds);
     }
 
     private static bool IsTransient(Exception ex)
@@ -1573,6 +1909,8 @@ public class Filexa2SwarmUIConnectorConfig
     public bool KeepResultOnPcOnly { get; set; }
     public string UploadModeHint { get; set; } = "";
     public string UploadModeHintUntilUtc { get; set; } = "";
+    public string ReferenceDownloadModeHint { get; set; } = "";
+    public string ReferenceDownloadModeHintUntilUtc { get; set; } = "";
 }
 
 public class UploadPayload

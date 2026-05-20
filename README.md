@@ -60,6 +60,9 @@ reference inside this extension; duplicate references can make SwarmUI restore f
 - It does not delete local SwarmUI outputs.
 - It polls lazily every 10 seconds, sends task status updates while enabled, and only runs
   generation when Filexa returns a task.
+- I2I reference downloads use short HTTP/1.1 close-connection attempts with retries, then small
+  JSON/base64 chunks when a poor network cannot deliver the reference in one body. A successful
+  chunk fallback is cached briefly so later references skip doomed direct GETs.
 - Direct result upload is capped at 40 MiB. If the generated file is larger than that, the
   connector keeps it on this PC and reports completion to Filexa without uploading image bytes.
 - If direct upload fails, fallback uses a JPEG payload at 80% quality, reusing an already converted

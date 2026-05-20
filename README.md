@@ -40,7 +40,7 @@ The extension is designed to work with https://t.me/WorkOnBigFilesBot only.
 9. Open the new `Filexa2SwarmUI Connector` tab.
 10. Paste the Filexa API URL and token shown by the Telegram bot. Save the token if you might
     reuse it; the tab hides it after saving.
-11. In the bot settings, set the SwarmUI model code, steps, and cfg if the defaults do not match.
+11. In the bot local connector settings, set the SwarmUI model code, steps, and cfg if the defaults do not match.
 12. Enable the connector and keep SwarmUI running.
 
 The connector uses SwarmUI's normal local API (`GetNewSession`, `GenerateText2Image`) and sends
@@ -85,7 +85,7 @@ If SwarmUI still shows old extension data after an update, delete
 
 ### Where do I change model code, steps, and cfg?
 
-Open Filexa and go to Local generation -> SwarmUI settings.
+Open Filexa and go to Local generation -> Local connector settings.
 
 ### The result from my PC does not upload back to Filexa.
 

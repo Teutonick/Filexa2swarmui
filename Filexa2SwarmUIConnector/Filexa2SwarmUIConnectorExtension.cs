@@ -17,7 +17,7 @@ namespace Filexa.Extensions.Filexa2SwarmUIConnector;
 
 public class Filexa2SwarmUIConnectorExtension : Extension
 {
-    private const string ConnectorVersion = "1.6";
+    private const string ConnectorVersion = "1.7";
     private const string ConnectorName = "Filexa2SwarmUI Connector";
     private const int MaxPromptChars = 8000;
     private const int MaxReferenceCount = 4;
@@ -1436,6 +1436,13 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         if (kind is not ("image" or "image_edit"))
         {
             throw new InvalidDataException("Unsupported Filexa task kind");
+        }
+        string engine = task["engine"]?.ToString() ?? "swarmui";
+        string clientType = task["client_type"]?.ToString() ?? "swarmui";
+        if (!string.Equals(engine, "swarmui", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(clientType, "swarmui", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("Unsupported Filexa local connector engine");
         }
         string prompt = task["prompt"]?.ToString() ?? "";
         if (string.IsNullOrWhiteSpace(prompt) || prompt.Length > MaxPromptChars || HasControlChars(prompt))

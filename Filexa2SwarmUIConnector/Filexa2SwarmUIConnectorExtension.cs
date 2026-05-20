@@ -17,12 +17,14 @@ namespace Filexa.Extensions.Filexa2SwarmUIConnector;
 
 public class Filexa2SwarmUIConnectorExtension : Extension
 {
-    private const string ConnectorVersion = "1.2";
+    private const string ConnectorVersion = "1.4";
     private const string ConnectorName = "Filexa2SwarmUI Connector";
     private const int MaxPromptChars = 8000;
     private const int MaxReferenceCount = 4;
     private const int MaxJsonResponseBytes = 1024 * 1024;
-    private const int MaxImageBytes = 40 * 1024 * 1024;
+    private const int MaxUploadImageBytes = 40 * 1024 * 1024;
+    private const int MaxSwarmImageBytes = MaxUploadImageBytes + 1;
+    private const int MaxChunkUploadImageBytes = 3 * 1024 * 1024;
     private const int UploadChunkBytes = 50 * 1024;
     private const int UploadFastTextChunkBytes = 8 * 1024;
     private const int UploadSafeTextChunkBytes = 4 * 1024;
@@ -145,6 +147,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
             ["last_error"] = _config.LastError,
             ["debug_logging"] = _config.DebugLogging,
             ["compress_images_before_upload"] = _config.CompressImagesBeforeUpload,
+            ["keep_result_on_pc_only"] = _config.KeepResultOnPcOnly,
             ["upload_mode_hint"] = ActiveUploadModeHint(),
             ["upload_mode_hint_until_utc"] = _config.UploadModeHintUntilUtc,
             ["server_time_utc"] = DateTime.UtcNow.ToString("O"),
@@ -158,7 +161,8 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         string swarm_url,
         bool enabled,
         bool debug_logging = false,
-        bool compress_images_before_upload = true
+        bool compress_images_before_upload = true,
+        bool keep_result_on_pc_only = false
     )
     {
         _config.ApiUrl = string.IsNullOrWhiteSpace(api_url) && !enabled
@@ -174,6 +178,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         _config.Enabled = enabled;
         _config.DebugLogging = debug_logging;
         _config.CompressImagesBeforeUpload = compress_images_before_upload;
+        _config.KeepResultOnPcOnly = keep_result_on_pc_only;
         ClearUploadModeHint(saveConfig: false);
         _config.Status = enabled ? "enabled" : "disabled";
         _config.LastEvent = enabled ? "Configuration saved" : "Connector disabled";
@@ -191,6 +196,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         _config.Token = "";
         _config.DebugLogging = false;
         _config.CompressImagesBeforeUpload = true;
+        _config.KeepResultOnPcOnly = false;
         ClearUploadModeHint(saveConfig: false);
         _config.Status = "disabled";
         _config.LastEvent = "Disconnected";
@@ -319,16 +325,52 @@ public class Filexa2SwarmUIConnectorExtension : Extension
             JObject generation = await PostJson($"{_config.SwarmUrl}/API/GenerateText2Image", parameters, taskToken, authorizeFilexa: false);
             DebugLog($"Task {jobId}: Swarm response image_count={(generation["images"] as JArray)?.Count ?? 0}");
 
-            await SetTaskStatus(task, "reading result", $"Task {jobId}: reading generated image", 88, taskToken);
-            byte[] image = await ReadGeneratedImage(generation, taskToken);
-            if (image.Length > MaxImageBytes)
+            if (_config.KeepResultOnPcOnly)
             {
-                throw new InvalidDataException("Generated image is too large");
-            }
-            UploadPayload upload = PrepareUploadPayload(image);
+                await SetTaskStatus(task, "generated on this PC", $"Task {jobId}: generated on this PC", 94, taskToken);
+                await ReportComplete(task["result_complete_url"]?.ToString() ?? "", taskToken);
 
-            await SetTaskStatus(task, "uploading result", $"Task {jobId}: uploading result to Filexa ({upload.Bytes.Length} bytes)", 94, taskToken);
-            await UploadResultWithRetry(task, task["result_upload_url"]?.ToString() ?? "", upload, deadline, taskToken);
+                _config.LastDurationSeconds = Math.Round((DateTime.UtcNow - startedAt).TotalSeconds, 1);
+                _config.Status = "idle";
+                _config.LastEvent = $"Task {jobId} completed locally in {_config.LastDurationSeconds:0.0}s";
+                _config.LastError = "";
+                ClearActiveJob();
+                SaveConfig(_config);
+                return;
+            }
+
+            byte[] image;
+            try
+            {
+                await SetTaskStatus(task, "reading result", $"Task {jobId}: reading generated image", 88, taskToken);
+                image = await ReadGeneratedImage(generation, taskToken);
+            }
+            catch (LocalOnlyCompletionException ex)
+            {
+                await CompleteTaskLocally(task, jobId, startedAt, ex.Message, taskToken);
+                return;
+            }
+            if (image.Length > MaxUploadImageBytes)
+            {
+                await CompleteTaskLocally(
+                    task,
+                    jobId,
+                    startedAt,
+                    "Generated image is larger than 40 MiB; keeping it on this PC. Enable JPEG conversion or reduce output size to send it to Filexa.",
+                    taskToken
+                );
+                return;
+            }
+
+            try
+            {
+                await UploadResultWithRetry(task, task["result_upload_url"]?.ToString() ?? "", image, deadline, taskToken);
+            }
+            catch (LocalOnlyCompletionException ex)
+            {
+                await CompleteTaskLocally(task, jobId, startedAt, ex.Message, taskToken);
+                return;
+            }
 
             _config.LastDurationSeconds = Math.Round((DateTime.UtcNow - startedAt).TotalSeconds, 1);
             _config.Status = "idle";
@@ -419,7 +461,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
             }
             string url = AbsoluteFilexaUrl(item["url"]?.ToString() ?? "");
             string mime = ValidateImageMime(item["mime_type"]?.ToString() ?? "image/jpeg");
-            byte[] bytes = await GetBytes(url, cancel, authorizeFilexa: true, maxBytes: MaxImageBytes);
+            byte[] bytes = await GetBytes(url, cancel, authorizeFilexa: true, maxBytes: MaxUploadImageBytes);
             DebugLog($"Downloaded reference {i}: mime={mime}, bytes={bytes.Length}");
             dataUrls.Add($"data:{mime};base64,{Convert.ToBase64String(bytes)}");
             await SetTaskStatus(task, "downloading references", $"Downloaded reference {i + 1}/{references.Count}", 18 + (i + 1) * 3, cancel);
@@ -455,27 +497,52 @@ public class Filexa2SwarmUIConnectorExtension : Extension
             {
                 throw new InvalidDataException("SwarmUI returned an invalid data URL");
             }
-            byte[] data = Convert.FromBase64String(first[(comma + 1)..]);
-            if (data.Length > MaxImageBytes)
+            string payload = first[(comma + 1)..];
+            if (EstimatedBase64DecodedBytes(payload) > MaxUploadImageBytes)
             {
-                throw new InvalidDataException("Generated image is too large");
+                throw new LocalOnlyCompletionException(
+                    "Generated image is larger than 40 MiB; keeping it on this PC. Enable JPEG conversion or reduce output size to send it to Filexa."
+                );
+            }
+            byte[] data = Convert.FromBase64String(payload);
+            if (data.Length > MaxUploadImageBytes)
+            {
+                throw new LocalOnlyCompletionException(
+                    "Generated image is larger than 40 MiB; keeping it on this PC. Enable JPEG conversion or reduce output size to send it to Filexa."
+                );
             }
             return data;
         }
-        return await GetBytes(AbsoluteSwarmUrl(first), cancel, authorizeFilexa: false, maxBytes: MaxImageBytes);
+        try
+        {
+            byte[] data = await GetBytes(AbsoluteSwarmUrl(first), cancel, authorizeFilexa: false, maxBytes: MaxSwarmImageBytes);
+            if (data.Length > MaxUploadImageBytes)
+            {
+                throw new LocalOnlyCompletionException(
+                    "Generated image is larger than 40 MiB; keeping it on this PC. Enable JPEG conversion or reduce output size to send it to Filexa."
+                );
+            }
+            return data;
+        }
+        catch (InvalidDataException ex) when (ex.Message == "Response is too large")
+        {
+            throw new LocalOnlyCompletionException(
+                "Generated image is larger than 40 MiB; keeping it on this PC. Enable JPEG conversion or reduce output size to send it to Filexa."
+            );
+        }
     }
 
-    private UploadPayload PrepareUploadPayload(byte[] image)
+    private UploadPayload PrepareUploadPayload(byte[] image, bool forceJpeg = false)
     {
         string originalMime = DetectImageMime(image);
-        if (!_config.CompressImagesBeforeUpload || image.Length < CompressionStartBytes)
+        if (!forceJpeg && (!_config.CompressImagesBeforeUpload || image.Length < CompressionStartBytes))
         {
             return new UploadPayload(image, originalMime);
         }
         try
         {
             byte[] jpeg = ConvertToJpeg(image, UploadJpegQuality);
-            DebugLog($"Converted image to JPEG before upload: {image.Length} -> {jpeg.Length} bytes, jpeg quality={UploadJpegQuality}");
+            DebugLog($"Converted image to JPEG before upload: {image.Length} -> {jpeg.Length} bytes, jpeg quality={UploadJpegQuality}, forced={forceJpeg}");
             return new UploadPayload(jpeg, "image/jpeg");
         }
         catch (Exception ex)
@@ -493,34 +560,26 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         return output.ToArray();
     }
 
-    private async Task UploadResultWithRetry(JObject task, string path, UploadPayload image, DateTime deadline, CancellationToken cancel)
+    private async Task UploadResultWithRetry(JObject task, string path, byte[] originalImage, DateTime deadline, CancellationToken cancel)
     {
-        string cachedUploadMode = ActiveUploadModeHint();
-        if (!string.IsNullOrWhiteSpace(cachedUploadMode))
+        UploadPayload directUpload = PrepareUploadPayload(originalImage);
+        if (directUpload.Bytes.Length > MaxUploadImageBytes)
         {
-            DebugLog($"Using cached upload mode {cachedUploadMode} until {_config.UploadModeHintUntilUtc}");
-            await SetTaskStatus(
-                task,
-                "uploading JSON/base64 result",
-                $"Using cached upload mode {cachedUploadMode}",
-                94,
-                cancel
+            throw new LocalOnlyCompletionException(
+                "Generated image is larger than 40 MiB after configured conversion; keeping it on this PC. Enable JPEG conversion or reduce output size to send it to Filexa."
             );
-            await UploadResultTextChunksAdaptive(task, path, image, deadline, cancel, cachedUploadMode);
-            return;
         }
-
         try
         {
             await SetTaskStatus(
                 task,
                 "uploading result",
-                $"Upload attempt 1/1 to Filexa ({image.Bytes.Length} bytes)",
+                $"Upload attempt 1/1 to Filexa ({directUpload.Bytes.Length} bytes)",
                 94,
                 cancel
             );
-            DebugLog($"Upload attempt 1/1: bytes={image.Bytes.Length}, mime={image.MimeType}");
-            await UploadResult(path, image.Bytes, image.MimeType, DirectUploadTimeout, cancel);
+            DebugLog($"Upload attempt 1/1: bytes={directUpload.Bytes.Length}, mime={directUpload.MimeType}");
+            await UploadResult(path, directUpload.Bytes, directUpload.MimeType, DirectUploadTimeout, cancel);
             ClearUploadModeHint();
             return;
         }
@@ -530,17 +589,25 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         }
         catch (Exception ex) when (!cancel.IsCancellationRequested && IsTransient(ex) && DateTime.UtcNow + TimeSpan.FromSeconds(5) < deadline)
         {
-            DebugLog($"Direct upload failed, switching to binary chunk upload: {ex.Message}");
+            Logs.Warning($"[{ConnectorName}] Direct Filexa upload failed ({ex.Message}); forcing JPEG conversion before chunk fallback.");
             await PostTaskStatusSafe(
                 task["status_url"]?.ToString() ?? "",
-                "direct upload failed; switching to binary chunk upload",
+                "direct upload failed; forcing JPEG conversion",
                 94,
                 cancel
             );
         }
+        UploadPayload fallbackUpload = PrepareUploadPayload(originalImage, forceJpeg: true);
+        if (fallbackUpload.Bytes.Length > MaxChunkUploadImageBytes)
+        {
+            string message = $"Direct upload failed and JPEG fallback is still {fallbackUpload.Bytes.Length} bytes (> {MaxChunkUploadImageBytes}); keeping result on this PC. Network is probably too unstable for a large upload.";
+            Logs.Warning($"[{ConnectorName}] {message}");
+            throw new LocalOnlyCompletionException(message);
+        }
+        Logs.Warning($"[{ConnectorName}] Chunk fallback allowed for compressed result: {fallbackUpload.Bytes.Length} bytes.");
         try
         {
-            await UploadResultChunksWithRetry(task, path, image, deadline, cancel);
+            await UploadResultChunksWithRetry(task, path, fallbackUpload, deadline, cancel);
             ClearUploadModeHint();
             return;
         }
@@ -562,7 +629,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
                 cancel
             );
         }
-        await UploadResultTextChunksAdaptive(task, path, image, deadline, cancel);
+        await UploadResultTextChunksAdaptive(task, path, fallbackUpload, deadline, cancel);
     }
 
     private async Task UploadResult(string path, byte[] image, string mimeType, TimeSpan timeout, CancellationToken cancel)
@@ -833,6 +900,41 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         }
     }
 
+    private async Task CompleteTaskLocally(
+        JObject task,
+        string jobId,
+        DateTime startedAt,
+        string reason,
+        CancellationToken cancel
+    )
+    {
+        string cleanReason = ShortPreview(reason, 500);
+        Logs.Warning($"[{ConnectorName}] Task {jobId} completed locally without upload: {cleanReason}");
+        await SetTaskStatus(task, "generated on this PC", $"Task {jobId}: {cleanReason}", 94, cancel);
+        await ReportComplete(task["result_complete_url"]?.ToString() ?? "", cancel);
+
+        _config.LastDurationSeconds = Math.Round((DateTime.UtcNow - startedAt).TotalSeconds, 1);
+        _config.Status = "idle";
+        _config.LastEvent = $"Task {jobId} completed locally: {ShortPreview(cleanReason, 160)}";
+        _config.LastError = "";
+        ClearActiveJob();
+        SaveConfig(_config);
+    }
+
+    private async Task ReportComplete(string path, CancellationToken cancel)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new InvalidDataException("Filexa task does not support local-only completion");
+        }
+        await PostJson(
+            AbsoluteFilexaUrl(path),
+            new JObject(),
+            cancel,
+            timeout: FilexaJsonTimeout
+        );
+    }
+
     private async Task SetTaskStatus(JObject task, string status, string lastEvent, int progress, CancellationToken cancel)
     {
         SetStatus(status, lastEvent);
@@ -1037,6 +1139,14 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         if (!string.IsNullOrWhiteSpace(task["result_text_chunk_upload_url"]?.ToString()))
         {
             AbsoluteFilexaUrl(task["result_text_chunk_upload_url"]!.ToString());
+        }
+        if (!string.IsNullOrWhiteSpace(task["result_complete_url"]?.ToString()))
+        {
+            AbsoluteFilexaUrl(task["result_complete_url"]!.ToString());
+        }
+        else if (_config.KeepResultOnPcOnly)
+        {
+            throw new InvalidDataException("Filexa task does not support local-only completion");
         }
         AbsoluteFilexaUrl(task["failure_url"]?.ToString() ?? "");
         if (!string.IsNullOrWhiteSpace(task["status_url"]?.ToString()))
@@ -1389,6 +1499,17 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         return clean.Length <= limit ? clean : $"{clean[..limit]}...";
     }
 
+    private static long EstimatedBase64DecodedBytes(string value)
+    {
+        string clean = value.Trim();
+        if (clean.Length == 0)
+        {
+            return 0;
+        }
+        int padding = clean.EndsWith("==", StringComparison.Ordinal) ? 2 : clean.EndsWith("=", StringComparison.Ordinal) ? 1 : 0;
+        return (clean.Length / 4L) * 3L - padding;
+    }
+
     private void DebugLog(string message)
     {
         if (_config.DebugLogging)
@@ -1416,6 +1537,7 @@ public class Filexa2SwarmUIConnectorConfig
     public string LastError { get; set; } = "";
     public bool DebugLogging { get; set; }
     public bool CompressImagesBeforeUpload { get; set; } = true;
+    public bool KeepResultOnPcOnly { get; set; }
     public string UploadModeHint { get; set; } = "";
     public string UploadModeHintUntilUtc { get; set; } = "";
 }
@@ -1430,6 +1552,13 @@ public class UploadPayload
 
     public byte[] Bytes { get; }
     public string MimeType { get; }
+}
+
+public class LocalOnlyCompletionException : Exception
+{
+    public LocalOnlyCompletionException(string message) : base(message)
+    {
+    }
 }
 
 public class FilexaUnauthorizedException : Exception

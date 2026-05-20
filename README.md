@@ -60,13 +60,14 @@ reference inside this extension; duplicate references can make SwarmUI restore f
 - It does not delete local SwarmUI outputs.
 - It polls lazily every 10 seconds, sends task status updates while enabled, and only runs
   generation when Filexa returns a task.
-- It can convert generated images to JPEG at 80% quality before sending them back to Filexa. If a normal direct
-  result upload stalls, it automatically falls back to 50 KB binary chunks, then to 8 KB paced
-  JSON/base64 chunks, and finally to a safe 4 KB JSON/base64 mode without long per-mode retry loops,
-  so unstable networks, MTU issues, or bad routes are less likely to strand the connector on one job.
-  JSON/base64 upload uses `Connection: close` and pauses between chunks. When a JSON/base64 mode
-  succeeds, the connector caches that local upload mode for several hours and tries the normal direct
-  path again after the cache expires.
+- Direct result upload is capped at 40 MiB. If the generated file is larger than that, the
+  connector keeps it on this PC and reports completion to Filexa without uploading image bytes.
+- If direct upload fails, the connector forces JPEG conversion at 80% quality. Compressed results
+  up to 3 MiB use fallback uploads: 50 KB binary chunks, then 8 KB paced JSON/base64 chunks, and
+  finally a safe 4 KB JSON/base64 mode without long per-mode retry loops. If the compressed result
+  is still larger than 3 MiB, the connector keeps it on this PC and reports completion instead of
+  spending ages on a doomed upload. The slowest safe JSON/base64 upload uses `Connection: close`
+  and pauses between chunks.
 - The `Cancel active task` button asks Filexa to cancel the current task and returns the connector
   to polling for new tasks.
 
@@ -83,21 +84,20 @@ Open Filexa and go to Local generation -> SwarmUI settings.
 
 ### The result from my PC does not upload back to Filexa.
 
-If the process hangs after the file is ready, you may see a line like this in the SwarmUI
-terminal: `[Info] [Filexa2SwarmUI Connector] Upload attempt 1/1: bytes=1772384, mime=image/png`.
-The likely cause is network configuration: network, MTU, or route. Try a virtual private network
-or another network path. Keep `Convert images to JPEG 80% before upload` enabled in the extension
-settings.
+If result sending hangs and the SwarmUI terminal shows many failed `Upload attempt` lines, the
+likely cause is network configuration: network, MTU, or route. Try a virtual private network or
+another network path.
 
 ### Everything is stuck, the suggested tips do not help, the extension does not react, and Filexa is waiting without errors.
 
 Restarting SwarmUI usually fixes this; cancel the task in Filexa with `/cancel` first. If that
 still does not help, delete the extension and install the latest version from Git again.
 
-**Important: the developer and the bot do not have access to the user's computer. All operations
+**‼️ Important: the developer and the bot do not have access to the user's computer. All operations
 with third-party software, downloaded models, and local configuration are performed by the user at
 their own risk. The developer is not responsible for output quality, software breakage, hardware
-damage, data loss, or any other loss caused by these actions.**
+damage, data loss, or any other loss caused by these actions. Use generative models strictly
+according to their license!**
 
 
 ## Legal Notice

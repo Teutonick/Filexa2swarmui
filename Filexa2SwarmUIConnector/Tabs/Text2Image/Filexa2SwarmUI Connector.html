@@ -6,29 +6,40 @@
     local generation. Keep SwarmUI open while jobs run.
   </p>
 
-  <label for="filexa_api_url">Filexa API URL</label>
-  <input id="filexa_api_url" placeholder="https://your-bot-domain.example" />
+  <section class="filexa-section filexa-connection-section">
+    <label for="filexa_api_url">Filexa API URL</label>
+    <input id="filexa_api_url" placeholder="https://your-bot-domain.example" />
 
-  <label for="filexa_token">Connection token</label>
-  <input id="filexa_token" placeholder="Paste token from Telegram bot" />
+    <label for="filexa_token">Connection token</label>
+    <input id="filexa_token" placeholder="Paste token from Telegram bot" />
 
-  <label for="filexa_swarm_url">Local SwarmUI URL</label>
-  <input id="filexa_swarm_url" value="http://127.0.0.1:7801" />
+    <label for="filexa_swarm_url">Local SwarmUI URL</label>
+    <input id="filexa_swarm_url" value="http://127.0.0.1:7801" />
 
-  <label class="filexa-row">
-    <input id="filexa_enabled" type="checkbox" />
-    Enable connector
-  </label>
+    <label class="filexa-toggle">
+      <input id="filexa_enabled" type="checkbox" />
+      <span class="filexa-toggle-control"></span>
+      <span>Enable connector</span>
+    </label>
+  </section>
 
-  <label class="filexa-row">
-    <input id="filexa_debug_logging" type="checkbox" />
-    Debug logging
-  </label>
+  <details class="filexa-section filexa-advanced">
+    <summary>Fine-tuning settings</summary>
+    <label class="filexa-row">
+      <input id="filexa_debug_logging" type="checkbox" />
+      Debug logging
+    </label>
 
-  <label class="filexa-row">
-    <input id="filexa_compress_images_before_upload" type="checkbox" checked />
-    Convert images to JPEG 80% before upload
-  </label>
+    <label class="filexa-row">
+      <input id="filexa_compress_images_before_upload" type="checkbox" checked />
+      Convert images to JPEG 80% before upload
+    </label>
+
+    <label class="filexa-row">
+      <input id="filexa_keep_result_on_pc_only" type="checkbox" />
+      Do not send generated image to bot
+    </label>
+  </details>
 
   <div class="filexa-actions">
     <button onclick="filexa2SwarmUIConnectorSave()">Save</button>

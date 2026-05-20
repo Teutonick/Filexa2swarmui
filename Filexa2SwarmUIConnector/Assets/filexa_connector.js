@@ -5,7 +5,7 @@
         reject(new Error("SwarmUI genericRequest API is not available"));
         return;
       }
-      genericRequest(route, body || {}, resolve, 0, (error) => {
+      genericRequest(route, body || {}, resolve, undefined, (error) => {
         reject(new Error(String(error || "request failed")));
       });
     });
@@ -34,6 +34,7 @@
       `Token saved: ${data.has_token ? "yes" : "no"}`,
       `Debug logging: ${data.debug_logging ? "on" : "off"}`,
       `JPEG 80% conversion before upload: ${data.compress_images_before_upload ? "on" : "off"}`,
+      `Result upload to bot: ${data.keep_result_on_pc_only ? "off" : "on"}`,
       `Polls: ${data.poll_count || 0}`,
     ];
     if (data.active_job_id) {
@@ -69,6 +70,7 @@
         document.getElementById("filexa_enabled").checked = !!data.enabled;
         document.getElementById("filexa_debug_logging").checked = !!data.debug_logging;
         document.getElementById("filexa_compress_images_before_upload").checked = data.compress_images_before_upload !== false;
+        document.getElementById("filexa_keep_result_on_pc_only").checked = !!data.keep_result_on_pc_only;
       }
       status.textContent = renderStatus(data);
     } catch (error) {
@@ -94,6 +96,7 @@
         enabled: document.getElementById("filexa_enabled").checked,
         debug_logging: document.getElementById("filexa_debug_logging").checked,
         compress_images_before_upload: document.getElementById("filexa_compress_images_before_upload").checked,
+        keep_result_on_pc_only: document.getElementById("filexa_keep_result_on_pc_only").checked,
       });
       document.getElementById("filexa_token").value = "";
       status.textContent = renderStatus(data);

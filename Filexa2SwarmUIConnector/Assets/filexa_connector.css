@@ -19,6 +19,26 @@
   font-weight: 600;
 }
 
+.filexa-section {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid rgba(128, 128, 128, 0.24);
+  border-radius: 6px;
+}
+
+.filexa-connection-section {
+  border-color: rgba(80, 150, 255, 0.38);
+}
+
+.filexa-advanced {
+  opacity: 0.92;
+}
+
+.filexa-advanced summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
 .filexa-connector-panel input:not([type="checkbox"]) {
   width: 100%;
   box-sizing: border-box;
@@ -30,6 +50,47 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.filexa-toggle {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+}
+
+.filexa-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.filexa-toggle-control {
+  position: relative;
+  width: 42px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(128, 128, 128, 0.45);
+  transition: background 0.15s ease;
+}
+
+.filexa-toggle-control::after {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 2px;
+  top: 2px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 0.15s ease;
+}
+
+.filexa-toggle input:checked + .filexa-toggle-control {
+  background: #2da44e;
+}
+
+.filexa-toggle input:checked + .filexa-toggle-control::after {
+  transform: translateX(20px);
 }
 
 .filexa-actions {

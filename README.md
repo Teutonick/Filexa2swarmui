@@ -1,3 +1,5 @@
+[English](README.md) | [Русский](README.ru.md)
+
 # Filexa2SwarmUI Connector
 
 Connects SwarmUI to Filexa local generation so Telegram users can run T2I and I2I jobs on this PC.
@@ -10,7 +12,9 @@ Not affiliated with, endorsed by, or sponsored by SwarmUI.
 ## Layout
 
 - `Filexa2SwarmUIConnector/` - SwarmUI extension source.
+- `API_CONTRACT.md` - bot-side API contract for reusing this connector with another bot/server.
 - `README.md` - installation and usage guide.
+- `README.ru.md` - Russian installation and usage guide.
 - `LICENSE` - source code license.
 - `NOTICE.md` - legal notices and disclaimers.
 - `SECURITY.md` - vulnerability reporting policy.
@@ -45,6 +49,7 @@ The extension is designed to work with https://t.me/WorkOnBigFilesBot only.
 
 The connector uses SwarmUI's normal local API (`GetNewSession`, `GenerateText2Image`) and sends
 all traffic outbound from the user's PC to Filexa. No public SwarmUI port is required.
+The bot-side HTTP contract for compatible servers is documented in `API_CONTRACT.md`.
 
 SwarmUI compiles extensions inside its own source tree. This repository provides the connector source code only. SwarmUI compiles the
 extension inside the user's local SwarmUI installation during restart/update.

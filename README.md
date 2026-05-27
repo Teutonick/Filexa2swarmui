@@ -5,7 +5,7 @@
 Connects SwarmUI to Filexa local generation so Telegram users can run T2I and I2I jobs on this PC.
 The connector tab shows live polling, active job, elapsed time, latest upload status, and optional debug logging.
 
-Bot: https://t.me/WorkOnBigFilesBot
+Bot: https://t.me/FilexaAIBot
 
 Not affiliated with, endorsed by, or sponsored by SwarmUI.
 
@@ -22,7 +22,7 @@ Not affiliated with, endorsed by, or sponsored by SwarmUI.
 Prebuilt binaries are not distributed in this repository.
 
 ## Install For A SwarmUI User
-The extension is designed to work with https://t.me/WorkOnBigFilesBot only.
+The extension is designed to work with https://t.me/FilexaAIBot only.
 
 1. Install SwarmUI from the official project:
    https://github.com/mcmonkeyprojects/SwarmUI

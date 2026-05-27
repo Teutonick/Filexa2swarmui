@@ -5,7 +5,7 @@
 Filexa2SwarmUI Connector подключает SwarmUI к локальной генерации Filexa, чтобы пользователи Telegram могли запускать T2I и I2I задачи на своем компьютере.
 Вкладка коннектора показывает состояние polling, активную задачу, elapsed time, latest upload status и optional debug logging.
 
-Бот: https://t.me/WorkOnBigFilesBot
+Бот: https://t.me/FilexaAIBot
 
 Не связан со SwarmUI, не одобрен и не спонсируется проектом SwarmUI.
 
@@ -30,7 +30,7 @@ Prebuilt binaries в этом репозитории не распростран
 
 ## Как установить для пользователя SwarmUI
 
-Этот extension рассчитан на работу только с https://t.me/WorkOnBigFilesBot.
+Этот extension рассчитан на работу только с https://t.me/FilexaAIBot.
 
 1. Установите SwarmUI из официального проекта:
    https://github.com/mcmonkeyprojects/SwarmUI

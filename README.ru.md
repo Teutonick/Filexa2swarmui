@@ -53,7 +53,7 @@ Prebuilt binaries в этом репозитории не распростран
 10. Вставьте Filexa API URL и token, которые показал Telegram bot. Сохраните token отдельно, если
     он может понадобиться позже: после сохранения вкладка скрывает token.
 11. В настройках local connector в боте задайте SwarmUI model code, steps и cfg, если defaults вам не подходят.
-12. Включите коннектор и держите SwarmUI запущенным.
+12. Сохраните коннектор (`Enable connector` включен по умолчанию) и держите SwarmUI запущенным.
 
 Коннектор использует обычный local API SwarmUI (`GetNewSession`, `GenerateText2Image`) и отправляет
 весь трафик исходящими запросами с компьютера пользователя в Filexa. Публичный SwarmUI port не нужен.
@@ -73,6 +73,8 @@ package reference внутри этого extension: duplicate references мог
 - Он не удаляет локальные SwarmUI outputs.
 - Он делает lazy polling каждые 10 секунд, отправляет обновления статуса task, пока включен, и запускает
   generation только когда Filexa возвращает task.
+- `Disconnect` останавливает polling и локальную активность, но сохраняет token, пока вы
+  не замените его или не удалите local extension config вручную.
 - I2I reference downloads используют короткие HTTP/1.1 close-connection attempts с retries, затем
   маленькие JSON/base64 chunks, если слабая сеть не может доставить reference одним body. Успешный
   chunk fallback ненадолго кэшируется, чтобы следующие references пропускали заведомо неудачные direct GET.

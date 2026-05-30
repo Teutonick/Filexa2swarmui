@@ -17,7 +17,7 @@ namespace Filexa.Extensions.Filexa2SwarmUIConnector;
 
 public class Filexa2SwarmUIConnectorExtension : Extension
 {
-    private const string ConnectorVersion = "1.7";
+    private const string ConnectorVersion = "1.8";
     private const string ConnectorName = "Filexa2SwarmUI Connector";
     private const int MaxPromptChars = 8000;
     private const int MaxReferenceCount = 4;
@@ -200,10 +200,6 @@ public class Filexa2SwarmUIConnectorExtension : Extension
         _activeTaskCancelRequested = true;
         _activeTaskCancel?.Cancel();
         _config.Enabled = false;
-        _config.Token = "";
-        _config.DebugLogging = false;
-        _config.CompressImagesBeforeUpload = true;
-        _config.KeepResultOnPcOnly = false;
         ClearUploadModeHint(saveConfig: false);
         ClearReferenceDownloadModeHint(saveConfig: false);
         _config.Status = "disabled";
@@ -1897,7 +1893,7 @@ public class Filexa2SwarmUIConnectorExtension : Extension
 
 public class Filexa2SwarmUIConnectorConfig
 {
-    public bool Enabled { get; set; }
+    public bool Enabled { get; set; } = true;
     public string ApiUrl { get; set; } = "";
     public string Token { get; set; } = "";
     public string SwarmUrl { get; set; } = "http://127.0.0.1:7801";
